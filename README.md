@@ -1,2 +1,5 @@
-# datatable
-intro to data.table package
+You should install these packages:
+
+* data.table
+* grid
+* png

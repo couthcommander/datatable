@@ -1,0 +1,526 @@
+---
+title: "Introduction to data.table"
+author: Cole Beck
+date: '2021-04-30'
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r config, include = FALSE}
+library(data.table)
+library(png)
+library(grid)
+```
+
+# Discussion Points
+
+* when to use data.table
+* basic data.frame / data.table functionality
+  * extraction and assignment
+  * merge and reshaping
+  * aggregate functions
+* new functionality
+  * keys, .N, .SD
+* unexpected behavior
+* final example
+
+# When & Why
+
+data.table is an extension of data.frame. Functions that work with data.frames _should_ work with data.tables. While this isn't entirely true (especially functions not included in base R), you can see that a data.table is a data.frame.
+
+```{r}
+inherits(data.table(), 'data.frame')
+```
+
+So you can use it as much as you'd like. Primary though, you would use it for large data sets.
+
+## Cole's rules of thumb for big data
+
+  1. A CSV file > 500 MB is big. Use `data.table::fread()`
+      * add the argument `data.table = FALSE` if you must
+  1. If your data set is between 500 MB and 8 GB, use data.table
+  1. If your data set is over 8 GB, store it in a database (such as sqlite or mysql) and use an ODBC package
+  1. If your code will run on a server, you may have more than 32 GB ram. While this changes the equation and gives added flexibility, I would stick with my suggestions.
+  1. If other people will use your code, write code that supports both.
+
+```{r, echo = FALSE}
+i1 = readPNG('img1.png')
+i2 = readPNG('img2.png')
+i3 = readPNG('img3.png')
+plot(NULL, xlim = c(0, 3), ylim = c(0, 1), xlab = '', ylab = '', axes = FALSE, type = 'n', xaxs = 'i', yaxs = 'i')
+axis(1, c(1, 2), c('500 MB', '8 GB'))
+lines(c(1, 1), c(0,1))
+lines(c(2, 2), c(0,1))
+text(0.5, 0.8, "data.frame")
+text(1.5, 0.8, "data.table")
+text(2.5, 0.8, "database")
+box()
+grid.raster(i1, x = 0.25, y = 0.3, width = 0.15, just = c('center','bottom'))
+grid.raster(i2, x = 0.525, y = 0.3, width = 0.2, just = c('center','bottom'))
+grid.raster(i3, x = 0.8, y = 0.3, width = 0.25, just = c('center','bottom'))
+```
+
+## How to learn more
+
+From the web: [data.table vignettes][vign]
+
+From R:
+
+```{r, eval = FALSE}
+browseVignettes('data.table')
+```
+
+From YouTube:
+
+[Cole's data.table lecture on YouTube][yt]
+
+* set quality to 1080p (HD)
+* enjoy other favorites on Cole's ~~award-winning~~ mediocre _Statistical Computing_ play list
+
+# Basic functionality
+
+```{r makedata, echo = FALSE}
+source('makeData.R')
+tmp <- makeData()
+incident <- tmp[[1]]
+demo <- tmp[[2]]
+events_wide <- tmp[[3]]
+```
+
+Create three data sets
+
+* incident - 10 users each with 2 incident dates
+* demo - demographic info for each user
+* events_wide - repeated observations (visit/lab/surgery/rxfill) for each user
+
+```{r showdata}
+head(incident)
+head(demo)
+head(events_wide)
+```
+
+## From df to dt and back
+
+```{r todf}
+class(incident)
+class(incident) <- 'data.frame'
+class(incident)
+```
+
+```{r todt}
+setDT(incident)
+class(incident)
+# inc <- as.data.table(incident)
+```
+
+## Merging
+
+`data.table::merge` works much like `base::merge`
+
+```{r merge}
+dat <- merge(incident, demo)
+dat
+rm(incident, demo)
+```
+
+## Extracting/filtering (get) and assignment/removal (set)
+
+Unlike `data.frame`, a comma (,) is not required to filter your data set.
+
+```{r get}
+dat[race == 'white']
+dat[race == 'white'][age > 40] # example of "chaining"
+dat[race == 'white' & age > 40, c('uid','age')]
+```
+
+`data.table` adds syntax for selecting/removing columns
+
+```{r getcol}
+dat[race == 'white' & age > 40, list(uid, age)]
+dat[race == 'white' & age > 40, .(uid, age)]
+dat[race == 'white' & age > 40, -c('uid', 'age')]
+dat[race == 'white' & age > 40, !c('uid', 'age')]
+```
+
+In `data.table`, use `:=` for assignment.
+
+```{r set}
+dat[, white40 := 0]
+dat[race == 'white' & age > 40, white40 := 1]
+dat[, birthYear := as.numeric(format(incident_date, '%Y')) - age]
+dat
+```
+
+You can assign multiple columns in a single statement.
+Like `data.frame`, setting to *NULL* deletes the column.
+
+```{r multiset}
+dat[, `:=`(white40 = NULL, birthYear = NULL)]
+dat
+```
+
+### Assignment within a for loop
+
+This example comes from the documentation on `set` - it's worth a read.
+
+```{r forloopset}
+m = matrix(1, nrow = 2e6L, ncol = 100L)
+DF = as.data.frame(m)
+DT = as.data.table(m)
+ix <- seq(1000)
+
+# set the 1st column for the first thousand rows
+system.time(for(i in ix) DF[i, 1] = i)
+system.time(for(i in ix) DT[i, V1 := i])
+# use `set`, avoids overhead of `[.data.table`
+system.time(for(i in ix) set(DT, i, 1L, i))
+```
+
+## Aggregate functions
+
+Examples of aggregate functions for data.frames include:
+
+* tapply
+* aggregate
+* lapply
+* do.call(rbind, lapply(split(...)))
+
+`data.table` uses the `by` argument. Note the difference when using `=` or `:=`.
+
+```{r aggr}
+dat[, mean(age), by = race]
+dat[, .(age = mean(age)), by = race]
+dat[, grp_age := mean(age), by = race]
+dat
+dat[, mean(age), by = .(race, sex)][order(race, sex)]
+```
+
+`data.table` adds two special variables: .N and .SD. If you find these confusing, you don't have to use them.
+
+```{r useN}
+dat[, .N, by = sex]
+```
+
+`.SD` (Subset of Data) is self-referential (to your data set); restrict it using the `.SDcols` argument.
+
+```{r useSD}
+lu <- function(x) length(unique(x)) # count of unique values
+dat[, sapply(.SD, lu)] # all columns
+dat[, sapply(.SD, lu), .SDcols = c('race', 'sex')]
+dat[, sapply(.SD, lu), .SDcols = age:sex] # range of columns
+dat[, sapply(.SD, lu), .SDcols = -c('age')] # exclude age
+```
+
+## Re-shaping
+
+Instead of `reshape`, `data.table` has `melt` and `dcast`. The `reshape` package also has a `melt` function. It's good practice to specify the package like `data.table::melt`.
+
+### Wide to long (melt)
+
+The `events_wide` data set has multiple sets of columns we want to reshape. Typically we would only need one `melt` statement, but in its case we need two.
+
+You can specify both `measure.vars` and `id.vars` but you probably only need one or the other. Using *patterns* can be extremely helpful.
+
+Remember to include `na.rm` or not. It's usually okay to leave `variable.factor = TRUE` as the default.
+
+```{r w2l}
+events_wide
+t1 <- data.table::melt(events_wide,
+  measure.vars = patterns('^visit', '^lab', '^surgery', '^rxfill'),
+  variable.name = 'obs',
+  value.name = c('visit','lab','surgery','rxfill'),
+  variable.factor = FALSE
+)
+t1
+events_long <- data.table::melt(t1,
+  id.vars = c('uid', 'obs'),
+  variable.name = 'event_type',
+  value.name = 'event_date',
+  na.rm = TRUE,
+  variable.factor = FALSE
+)[order(uid, event_type, obs)]
+events_long
+```
+
+Here's an alternative that uses the `tstrsplit` function.
+
+```{r w2l2}
+alt_long <- data.table::melt(events_wide,
+  id.vars = 'uid',
+  value.name = 'event_date',
+  na.rm = TRUE
+)
+alt_long
+alt_long[, c('event_type', 'obs') := tstrsplit(variable, '_')]
+alt_long[, variable := NULL][order(uid, event_type, obs)]
+```
+
+### Long to wide (dcast)
+
+`dcast` uses a formula-like expression.
+
+```{r l2w}
+dcast(events_long, uid ~ event_type + obs, value.var = 'event_date')
+```
+
+## Column names
+
+Use the `setnames` function
+
+```{r colnames}
+names(t1)
+setnames(t1, paste0('x', seq(ncol(t1)))) # set all columns
+setnames(t1, 'x1', 'userid') # set old column to new value
+setnames(t1, -1, paste0('y_', seq(2, ncol(t1)))) # set except 1
+names(t1)
+rm(t1)
+```
+
+# Expanded functionality
+
+We've already seen `.N` and `.SD`. Let's use *keys*, and the informative `tables` function.
+
+```{r addkeys}
+tables()
+setkey(dat, uid, incident_date)
+setkey(events_long, uid)
+tables()
+```
+
+Searching a `data.table` with keys is fast and efficient. As a side-effect, your data set will be re-ordered by its keys.
+
+Here's an example of filtering without keys
+
+```{r nonkey}
+dat[uid == 5]
+dat[uid == 5 & incident_date == as.Date('2017-11-29')]
+```
+
+and with keys
+
+```{r withkey}
+dat[.(5)]
+dat[.(5, as.Date('2017-11-29'))]
+dat[.(5), mult = 'first']
+dat[.(c(1:3))]
+```
+
+If your table has multiple keys, it's a little tricky to search if you want to ignore the first key. Both of these fail.
+
+```{r badkey}
+tryCatch(dat[.(, as.Date('2017-11-29'))], error = function(e) e)
+dat[.(unique(uid), as.Date('2017-11-29'))]
+```
+
+You may need the `nomatch` argument.
+
+```{r skipkey}
+dat[.(unique(uid), as.Date('2017-11-29')), nomatch = NULL]
+```
+
+# Expecting the unexpected
+
+Unexpected behavior in `data.table` often occurs when we write our own functions. Two big sources of problems come from *non-standard evaluation* (NSE) and *pass-by-reference*.
+
+NSE is the thing that lets us avoid typing out the full reference to columns occurring within our data set. For example, don't you hate typing `df[order(df[,'uid']),]` when you could just type `df[order(uid)]`? This becomes a problem when you have column names stored within variables.
+
+You can use `setkeyv` instead of `setkey`
+
+```{r varkeys}
+keycols <- c('uid', 'event_date')
+tryCatch(setkey(alt_long, keycols), error = function(e) e)
+setkeyv(alt_long, keycols)
+```
+
+And add the `with = FALSE` argument when extracting
+
+```{r varcols}
+tryCatch(alt_long[, keycols], error = function(e) e)
+alt_long[, ..keycols]
+alt_long[, keycols, with = FALSE]
+```
+
+In R when you pass an object to a function, a copy of that object is made. *pass-by-reference* is used to pass the object itself (by its memory address), which is much more efficient (and dangerous). We'll look at an example by creating a function to calculate great circle distance with the [Haversine formula][haver].
+
+```{r h1}
+haversine <- function(dt) {
+  # decimal degrees to radians
+  dtnames <- names(dt)
+  print(dtnames)
+  dt[,rLat := lat * pi / 180]
+  dt[,rLong := long * pi / 180]
+  dd <- dt[,outer(rLat,rLat,`-`)]
+  dl <- dt[,outer(rLong,rLong,`-`)]
+  allLat <- t(replicate(nrow(dt), dt[,rLat]))
+  a <- sin(dd/2)^2 + cos(allLat) * cos(dt[,rLat]) * sin(dl/2)^2
+  d <- 2 * 6371000 * asin(sqrt(a))
+  print(dtnames)
+  d
+}
+qdt <- as.data.table(quakes)
+ans <- haversine(qdt)
+names(qdt)
+```
+
+We actually have two problems. Note that our original data set `qdt` has been updated. This wasn't really our intention, though it may not actually hurt us. We also see that our variable of column names has been modified. That's because `data.table` made a *shallow* copy of our column names. This means it points to the original and is not a distinct copy. To make a distinct, or *deep* copy, use the `copy` function.
+
+```{r h2}
+haversine <- function(dt) {
+  dt <- copy(dt)
+  # decimal degrees to radians
+  dtnames <- copy(names(dt))
+  print(dtnames)
+  dt[,rLat := lat * pi / 180]
+  dt[,rLong := long * pi / 180]
+  dd <- dt[,outer(rLat,rLat,`-`)]
+  dl <- dt[,outer(rLong,rLong,`-`)]
+  allLat <- t(replicate(nrow(dt), dt[,rLat]))
+  a <- sin(dd/2)^2 + cos(allLat) * cos(dt[,rLat]) * sin(dl/2)^2
+  d <- 2 * 6371000 * asin(sqrt(a))
+  print(dtnames)
+  d
+}
+qdt <- as.data.table(quakes)
+ans <- haversine(qdt)
+names(qdt)
+```
+
+Let's update our function to include arguments for the latitude and longitude columns... which doesn't work.
+
+```{r h3}
+haversine <- function(dt, latCol, longCol) {
+  dt <- copy(dt)
+  # decimal degrees to radians
+  dtnames <- copy(names(dt))
+  print(dtnames)
+  dt[,rLat := latCol * pi / 180]
+  dt[,rLong := longCol * pi / 180]
+  dd <- dt[,outer(rLat,rLat,`-`)]
+  dl <- dt[,outer(rLong,rLong,`-`)]
+  allLat <- t(replicate(nrow(dt), dt[,rLat]))
+  a <- sin(dd/2)^2 + cos(allLat) * cos(dt[,rLat]) * sin(dl/2)^2
+  d <- 2 * 6371000 * asin(sqrt(a))
+  print(dtnames)
+  d
+}
+tryCatch(ans <- haversine(qdt, 'lat', 'long'), error = function(e) e)
+```
+
+In this case, we can use the `get` function.
+
+```{r h4}
+haversine <- function(dt, latCol, longCol) {
+  dt <- copy(dt)
+  # decimal degrees to radians
+  dtnames <- copy(names(dt))
+  print(dtnames)
+  dt[,rLat := get(latCol) * pi / 180]
+  dt[,rLong := get(longCol) * pi / 180]
+  dd <- dt[,outer(rLat,rLat,`-`)]
+  dl <- dt[,outer(rLong,rLong,`-`)]
+  allLat <- t(replicate(nrow(dt), dt[,rLat]))
+  a <- sin(dd/2)^2 + cos(allLat) * cos(dt[,rLat]) * sin(dl/2)^2
+  d <- 2 * 6371000 * asin(sqrt(a))
+  print(dtnames)
+  d
+}
+ans <- haversine(qdt, 'lat', 'long')
+```
+
+What if we want to use these arguments without quotes?
+
+It gets ugly but we can add `deparse` and `substitute`.
+
+```{r h5}
+haversine <- function(dt, latCol, longCol) {
+  dt <- copy(dt)
+  # decimal degrees to radians
+  dtnames <- copy(names(dt))
+  print(dtnames)
+  c1 <- deparse(substitute(latCol))
+  c2 <- deparse(substitute(longCol))
+  dt[,rLat := get(c1) * pi / 180]
+  dt[,rLong := get(c2) * pi / 180]
+  dd <- dt[,outer(rLat,rLat,`-`)]
+  dl <- dt[,outer(rLong,rLong,`-`)]
+  allLat <- t(replicate(nrow(dt), dt[,rLat]))
+  a <- sin(dd/2)^2 + cos(allLat) * cos(dt[,rLat]) * sin(dl/2)^2
+  d <- 2 * 6371000 * asin(sqrt(a))
+  print(dtnames)
+  d
+}
+ans <- haversine(qdt, lat, long)
+```
+
+## Code supporting both data.frame and data.table
+
+This function prints counts for the unique values within a column. Both `data.frame` and `data.table` can access a column with double-brackets.
+
+```{r whynotboth}
+counts <- function(dat, col) {
+  table(dat[[col]])
+}
+```
+
+This function converts a list to a `data.frame` or `data.table`. It will choose the right path depending on if the package is installed.
+
+```{r list2dat}
+l2df <- function(l, keepDT = FALSE) {
+  if(requireNamespace("data.table", quietly = TRUE)) {
+    x <- data.table::rbindlist(l)
+    if(!keepDT) x <- as.data.frame(x)
+  } else {
+    x <- do.call(rbind, c(l, make.row.names = FALSE))
+  }
+  x
+}
+```
+
+# A final example
+
+Let's revisit the `dat` and `events_long` data sets. We may want to write a function to merge incident dates with event dates. We might want to keep the closest event, or even restrict it to within some number of days.
+
+We introduce two new things, the `allow.cartesian` argument within brackets and the `by` argument within `unique`. Additionally, `x[y]` works like a merge (`merge(x, y, all.y=TRUE)` or *right outer join*) using each data sets' keys (`uid` in our case).
+
+```{r mergefun}
+datediff <- function(a, b) as.numeric(a - b)
+
+mergeByMostRecent <- function(x, y, nDays = NULL) {
+  z <- x[y, allow.cartesian = TRUE]
+  z <- z[event_date <= incident_date]
+  z[, dd := datediff(incident_date, event_date)]
+  if(!is.null(nDays)) {
+    z <- z[dd < nDays]
+  }
+  z <- z[order(uid, incident_date, dd)]
+  z[, dd := NULL]
+  unique(z, by = c('uid', 'incident_date'))
+}
+```
+
+Merge incident with closest prior event.
+
+```{r m1}
+mergeByMostRecent(dat, events_long)
+```
+
+Merge incident with closest prior event within 30 days.
+
+```{r m2}
+mergeByMostRecent(dat, events_long, 30)
+```
+
+Merge incident with closest prior *lab* event.
+
+```{r m3}
+mergeByMostRecent(dat, events_long[event_type == 'lab'])
+```
+
+```{r}
+sessionInfo()
+```
+
+[yt]: https://www.youtube.com/watch?v=hD8e5DWWNWw&list=PLycYUy1FlotD1iJVLSspu10rPDprZE0Vm&index=25
+[vign]: https://cran.r-project.org/web/packages/data.table/vignettes/
+[haver]: https://en.wikipedia.org/wiki/Haversine_formula

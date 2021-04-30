@@ -33,7 +33,7 @@ data.table is an extension of data.frame. Functions that work with data.frames _
 inherits(data.table(), 'data.frame')
 ```
 
-So you can use it as much as you'd like. Primary though, you would use it for large data sets.
+So you can use it as much as you'd like. Primarily though, you would use it for large data sets.
 
 ## Cole's rules of thumb for big data
 
